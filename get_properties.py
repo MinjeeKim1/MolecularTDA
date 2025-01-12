@@ -17,7 +17,6 @@ import xml.etree.ElementTree as ET
 from rdkit import Chem
 from rdkit.Chem import Descriptors, Crippen
 import math
-import re
 
 def get_cid_from_name(drug_name):
     url = f'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{drug_name}/property/Title/CSV'
@@ -123,84 +122,6 @@ def get_all_properties_to_excel(cids, output_filename="compounds_properties.xlsx
             print(f"Data fetched for CID {cid}")
         else:
             print(f"Error: Unable to fetch data for CID {cid}. Status code: {response.status_code}")
-        
-
-        drugbank_data = fetch_drugbank_data(get_drugbank_id(cid))
-        
-        water_sol = drugbank_data.get("Water Solubility")
-        if water_sol:
-            all_data[-1]["WaterSolubility"] = water_sol
-        else:
-            all_data[-1]["WaterSolubility"] = "N/A"
-
-        toxicity = drugbank_data.get("Rat acute toxicity")
-        if toxicity:
-            all_data[-1]["Toxicity"] = toxicity.split(" ")[0]
-        else:
-            all_data[-1]["Toxicity"] = "N/A"
-
-        severity_grade = get_severity_grade(cid)
-        if severity_grade:
-            all_data[-1]["SeverityGrade"] = severity_grade
-        else:
-            all_data[-1]["SeverityGrade"] = "N/A"
-
-        hepa_toxicity = get_hepa_toxicity(cid)
-        if hepa_toxicity:
-            all_data[-1]["Hepatotoxicity"] = hepa_toxicity
-        else:
-            all_data[-1]["Hepatotoxicity"] = "N/A"
-
-        pka = get_chembl_data(get_name_from_cid(cid))
-        pka_a = pka[0]
-        if pka_a:
-            all_data[-1]["APKA"] = pka[0]
-        else:
-            all_data[-1]["APKA"] = "N/A"
-        pka_b = pka[1]
-        if pka_b:
-            all_data[-1]["BPKA"] = pka[1]
-        else:
-            all_data[-1]["BPKA"] = "N/A"
-
-
-        aromatic_rings = find_aromatic_rings(cid)
-        all_data[-1]["AromaticRings"] = aromatic_rings
-
-        mol = Chem.MolFromSmiles(get_smiles(cid))
-        atom_count = rdMolDescriptors.CalcNumAtoms(mol)
-        all_data[-1]["AtomCount"] = atom_count
-
-        caco_two = drugbank_data.get("Caco-2 permeable")
-        if caco_two:
-            all_data[-1]["Caco2Permeable"] = caco_two
-        else:
-            all_data[-1]["Caco2Permeable"] = "N/A"
-
-        protein_binding_dictionary = drugbank_data.get("Protein binding")
-        if protein_binding_dictionary:
-            protein_binding_max = protein_binding_dictionary.get("max")
-            protein_binding_min = protein_binding_dictionary.get("min")
-
-            if protein_binding_max and protein_binding_min:
-                all_data[-1]["ProteinBindingMin"] = protein_binding_min
-                all_data[-1]["ProteinBindingMax"] = protein_binding_max
-        else:
-            all_data[-1]["ProteinBindingMin"] = "N/A"
-            all_data[-1]["ProteinBindingMax"] = "N/A"
-        
-        blood_brain = drugbank_data.get("Blood Brain Barrier")
-        if blood_brain:
-            all_data[-1]["BloodBrainBarrier"] = blood_brain
-        else:
-            all_data[-1]["BloodBrainBarrier"] = "N/A"
-
-
-        
-
-
-
-
 
 
     if all_data:
@@ -228,77 +149,6 @@ def find_aromatic_rings(cid):
         if all(mol.GetBondWithIdx(bond_idx).GetIsAromatic() for bond_idx in ring):
             aromatic_rings.append([mol.GetBondWithIdx(b).GetBeginAtomIdx() for b in ring])
     return len(aromatic_rings)
-
-
-def get_severity_grade(cid):
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--start-maximized")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-extensions")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-    url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
-    driver.get(url)
-
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'Severity Grade')]"))
-        )
-        severity_element = driver.find_element(
-            By.XPATH, "//div[contains(text(), 'Severity Grade')]/following-sibling::div"
-        )
-
-        severity_grade = severity_element.text.strip()
-
-        print(f"Severity Grade: {severity_grade}")
-        return severity_grade
-    except Exception as e:
-        print(f"Error occurred while fetching Severity Grade: {e}")
-        return None
-    finally:
-        driver.quit()
-
-def get_hepa_toxicity(cid): 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--start-maximized")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-extensions")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-    url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
-    driver.get(url)
-
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "Hepatotoxicity"))
-        )
-
-        likelihood_element = driver.find_element(
-            By.XPATH, "//section[@id='Hepatotoxicity']//p[contains(text(), 'Likelihood score')]"
-        )
-
-        likelihood_text = likelihood_element.text.strip()
-
-        match = re.search(r"Likelihood score:\s*([A-Z])", likelihood_text)
-        if match:
-            likelihood_score = match.group(1)
-            print(f"Likelihood Score (Letter): {likelihood_score}")
-            return likelihood_score
-        else:
-            print("Likelihood score letter not found.")
-            return None
-    except Exception as e:
-        print(f"Error occurred while fetching Likelihood Score: {e}")
-        return None
-    finally:
-        driver.quit()
-
 
 def get_smiles(cid):
     url = f'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/CanonicalSMILES/JSON'
@@ -373,7 +223,10 @@ def calculate_esol(smiles):
             coeff_ap * ap)
     
     solubility = 10 ** logS
-    return solubility
+    solubility_g = solubility * mwt
+    solubility_mgml = solubility_g / 1000
+
+    return solubility_mgml
 
 def fetch_drugbank_data(drugbank_id):
     options = Options()
@@ -384,9 +237,6 @@ def fetch_drugbank_data(drugbank_id):
     options.add_argument("--disable-plugins")
     options.add_argument("--disable-images")
     options.add_argument("--disable-javascript")
-    options.add_argument("--headless")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     results = {}
@@ -404,7 +254,6 @@ def fetch_drugbank_data(drugbank_id):
             "Rat acute toxicity": "//td[text()='Rat acute toxicity']/following-sibling::td[1]",
             "hERG inhibition (predictor I)": "//td[text()='hERG inhibition (predictor I)']/following-sibling::td[2]",
             "hERG inhibition (predictor II)": "//td[text()='hERG inhibition (predictor II)']/following-sibling::td[2]",
-            "Blood Brain Barrier": "//td[text()='Blood Brain Barrier']/following-sibling::td[2]",
         }
 
         for key, xpath in elements_to_fetch.items():
@@ -424,61 +273,15 @@ def fetch_drugbank_data(drugbank_id):
 
             protein_binding = protein_binding_section.text
             protein_binding = ''.join(filter(str.isdigit, protein_binding))
-            min_max = {}
 
             if protein_binding and int(protein_binding) > 100:
                 protein_binding = ".".join([protein_binding[i:i+2] for i in range(0, len(protein_binding), 2)])
-                if len(protein_binding) >= 5:
-                    min_max["min"] = protein_binding[:2]
-                    #max = elements up till 5th element after 3rd
-                    min_max["max"] = protein_binding[3:5]
-                else:
-                    min_max["min"] = protein_binding
-                    min_max["max"] = protein_binding
-
-            else:
-                min_max["min"] = 'N/A'
-                min_max["max"] = 'N/A'
+                average = sum(map(int, protein_binding.split("."))) / len(protein_binding.split("."))
             
-            results["Protein binding"] = min_max
+            results["Protein binding"] = average
         except Exception as e:
             results["Protein binding"] = None
             print(f"Error occurred while fetching protein binding: {e}")
-
-        try:
-            url = f"https://go.drugbank.com/drugs/{drugbank_id}"
-            driver.get(url)
-
-            WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.ID, "drug-moldb-properties"))
-            )
-
-            elements_to_fetch = {
-                'Water Solubility': "//td[text()='Water Solubility']/following-sibling::td[1]",
-            }
-
-        except Exception as e:
-            print(f"Error occurred: {e}")
-
-        try:
-            WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "drug-moldb-properties"))
-        )
-            water_solubility_xpath = '//td[text()="Water Solubility"]/following-sibling::td[1]'
-            water_solubility_element = WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.XPATH, water_solubility_xpath))
-            )
-
-            #remove mg/ml
-            water_solubility = water_solubility_element.text.split(" ")[0]
-            results['Water Solubility'] = water_solubility
-        except Exception as e:
-            results['Water Solubility'] = None
-            print(f"Error occurred while fetching water solubility: {e}")
-
-        if results['Water Solubility'] is None:
-            print("Water Solubility not found, dumping page source for debugging:")
-            print(driver.page_source)
 
     except Exception as e:
         print(f"Error occurred: {e}")
@@ -503,13 +306,16 @@ def main(drug_names, output_filename="compounds_properties.xlsx"):
     else:
         print("No valid CIDs found. Exiting.")
 
-#Replace with your drug names
+# Replace with your drug names
 drug_names = [
-    "Tetrabenazine"
+    "Amantadine", "Carbidopa", "Entacapone", "Levodopa", "Pramipexole", "Ramelteon", "Ropinirole", "Tolcapone",
+    "ER2001", "Alprazolam", "CKD-504", "Deutetrabenazine", "Dextromethorphan", "Digoxin", "Fluorine F-18",
+    "GSK-356278", "Haloperidol", "Idebenone", "Ketoconazole", "Latrepirdine", "Nilotinib", "Omeprazole", "Risperidone",
+    "Rolipram", "Sertraline", "Tominersen", "Ursodeoxycholic acid", "Warfarin", "Creatine", "Lexanersen", "Minocycline",
+    "Rovanersen", "VO659", "WVE-003", "ANX-005", "Acetylcysteine", "Atomoxetine", "Bevantolol", "Biotin", "Bupropion",
+    "Cannabidiol", "Citalopram", "Dronabinol", "Fenofibrate", "Laquinimod", "Lithium carbonate", "Mardepodect", "Mavoglurant",
+    "Memantine", "Neflamapimod", "OMS-824", "Pepinemab", "Phenylbutyric acid", "Pridopidine", "SRX-246", "Thiamine", "Triheptanoin",
+    "Ubidecarenone", "Valproic acid", "Quinidine", "Riluzole", "Tetrabenazine", "Tiapride", "Valbenazine"
 ]
 
-
-
-
 main(drug_names)
-
