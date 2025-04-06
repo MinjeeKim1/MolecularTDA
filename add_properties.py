@@ -17,7 +17,9 @@ drug_names = []
 with open(csv_file_path, mode='r', newline='', encoding='utf-8') as csvfile:
     reader = csv.DictReader(csvfile)
     for row in reader:
-        if 'Drug Name' in row:
+        #only get ones with huntington disease
+
+        if 'Huntington' in row['Disease']:
             drug_names.append(row['Drug Name'])
 
 # get smiles from pubchem
@@ -96,10 +98,23 @@ def get_properties_from_swissadme(smiles, name):
 
     driver.quit()
 
-#run for 1 smiles
-get_properties_from_swissadme(smiles_list[0], drug_names[0])
+for i in range(len(drug_names)):
+    if smiles_list[i]:
+        get_properties_from_swissadme(smiles_list[i], drug_names[i])
+    else:
+        print(f"SMILES not found for {drug_names[i]}")
+
 print("Properties downloaded")
 
+dir = os.path.abspath("downloads")
+files = os.listdir(dir)
+
+combined_df = pd.DataFrame()
+for file in files:
+    if file.endswith('.csv'):
+        file_path = os.path.join(dir, file)
+        df = pd.read_csv(file_path)
+        combined_df = pd.concat([combined_df, df], ignore_index=True)
 
 
 
