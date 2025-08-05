@@ -1,0 +1,66 @@
+library(readxl)
+library(dplyr)
+library(dendextend)
+library(ape)
+
+# 1. Load and clean data
+data <- read_excel("INSERTFILEDIRECTORY")
+data$Disease <- trimws(data$Disease)
+
+# 2. Fill NA with median of the whole column
+numeric_cols <- sapply(data, is.numeric)
+for (col in names(data)[numeric_cols]) {
+  med <- median(data[[col]], na.rm = TRUE)
+  data[[col]][is.na(data[[col]])] <- med
+}
+
+# 3. Remove duplicate rows
+data_unique <- data[!duplicated(data[, numeric_cols]), ]
+
+# 4. Scale numeric features
+data_numeric <- scale(data_unique[, numeric_cols])
+
+# 5. Hierarchical clustering
+dist_mat <- dist(data_numeric, method = "euclidean")
+hc <- hclust(dist_mat, method = "ward.D2")
+
+# 6. Convert to dendrogram
+dend <- as.dendrogram(hc)
+
+# Replace labels with actual drug names
+labels(dend) <- data_unique$`Drug Name`[hc$order]
+
+# Create disease color mapping (non-white palette)
+safe_palette <- c(
+  "red", "darkorange", "darkgreen",
+  "deepskyblue", "purple", "magenta", "brown"
+)
+disease_factor <- factor(data_unique$Disease)
+disease_colors <- setNames(safe_palette[seq_along(levels(disease_factor))],
+                           levels(disease_factor))
+
+# Color branches and labels by disease
+dend <- dend %>%
+  set("labels_col", disease_colors[as.character(data_unique$Disease[hc$order])]) %>%
+  set("branches_k_color", k = length(unique(data_unique$Disease)),
+      value = safe_palette[seq_along(levels(disease_factor))])
+
+# 7. Convert dendrogram to phylo
+phylo_tree <- as.phylo(dend)
+
+# 8. Plot Tree of Life (fan layout) with branch and tip colors
+plot(phylo_tree,
+     type = "fan",
+     tip.color = disease_colors[as.character(data_unique$Disease[hc$order])],
+     cex = 0.5,           # label size
+     no.margin = TRUE)
+
+legend("topleft",
+       legend = levels(disease_factor),
+       col = disease_colors,
+       pch = 19,
+       bty = "n",
+       cex = 0.8,
+       title = "Disease")
+
+
