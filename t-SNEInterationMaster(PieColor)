@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # Load Data
- df = pd.read_csv("DrugsFinal.csv")
+df = pd.read_csv("DrugsFinal.csv")
 
 
 # Guard columns
