@@ -3,6 +3,9 @@ import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Wedge
+import matplotlib as mpl
+import matplotlib.patches as mpatches
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.cluster import DBSCAN
 from sklearn.manifold import TSNE
@@ -10,10 +13,11 @@ import kmapper as km
 from kmapper import Cover
 import networkx as nx
 from PIL import Image, ImageDraw, ImageFont
-import matplotlib as mpl
-import matplotlib.patches as mpatches
 
-df = pd.read_csv("DrugsFinal.csv")
+
+# Load Data
+ df = pd.read_csv("DrugsFinal.csv")
+
 
 # Guard columns
 if "Disease" not in df.columns:
@@ -32,19 +36,16 @@ drug_names = df["Drug Name"].astype(str).values
 label_encoder = LabelEncoder()
 disease_labels = label_encoder.fit_transform(diseases)
 
-
 # t-SNE Lens (2D)
 n_samples = X_scaled.shape[0]
-# Perplexity must be < n_samples; a safe cap:
-perp = max(5, min(30, n_samples // 3))  # tweakable
-
+perp = max(5, min(30, n_samples // 3))  # safe cap
 tsne = TSNE(
     n_components=2,
     perplexity=perp,
     learning_rate="auto",
     init="pca",
     n_iter=1000,
-    metric="euclidean",   # switch to "cosine" if desired and supported
+    metric="euclidean",
     random_state=42,
     verbose=0
 )
@@ -52,29 +53,46 @@ lens = tsne.fit_transform(X_scaled)
 
 
 # Mapper Parameters
-n_cubes_list = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
-perc_overlap_list = [0.1, 0.15, 0.2. 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
+n_cubes_list = [5, 10, 15, 20, 25]
+perc_overlap_list = [0.2, 0.3, 0.4, 0.5, 0.6]
 eps = 30
 min_samples = 3
 
-
 # Output Directory
-output_dir = "mapper_images_tsne"
+output_dir = "mapper_images_tsne_pies"
 os.makedirs(output_dir, exist_ok=True)
 
 
-# Disease color palette
-unique_diseases = pd.Series(diseases).unique()
+# Disease color palette & legend
+unique_diseases_sorted = sorted(pd.Series(diseases).unique().tolist())
 cmap = mpl.colormaps.get('tab20')
-disease_to_color = {d: cmap(i % 20) for i, d in enumerate(sorted(unique_diseases))}
+disease_to_color = {d: cmap(i % 20) for i, d in enumerate(unique_diseases_sorted)}
+legend_handles = [mpatches.Patch(color=disease_to_color[d], label=d) for d in unique_diseases_sorted]
 
-# Kepler Mapper
+
+# Helper: draw a pie at (x, y) in data coords
+def draw_pie(ax, x, y, fracs, colors, radius):
+    """Draw a pie chart centered at (x, y) in data coordinates."""
+    if len(fracs) == 0:
+        return
+    fracs = np.array(fracs, dtype=float)
+    s = fracs.sum()
+    if s <= 0:
+        return
+    fracs = fracs / s
+    angles = np.cumsum(np.concatenate(([0.0], fracs))) * 360.0
+    for i in range(len(fracs)):
+        wedge = Wedge(center=(x, y), r=radius, theta1=angles[i], theta2=angles[i+1],
+                      facecolor=colors[i], edgecolor="black", linewidth=0.3, alpha=0.98)
+        ax.add_patch(wedge)
+
+
+# Kepler Mapper with pie nodes
 mapper = km.KeplerMapper(verbose=0)
-
 first_panel = True
+
 for n_cubes in n_cubes_list:
     for perc_overlap in perc_overlap_list:
-        # Build Mapper graph
         graph = mapper.map(
             lens,
             X_scaled,
@@ -82,59 +100,60 @@ for n_cubes in n_cubes_list:
             clusterer=DBSCAN(eps=eps, min_samples=min_samples)
         )
 
-        # Convert to NetworkX and layout
         G = km.adapter.to_nx(graph)
         pos = nx.spring_layout(G, seed=42)
 
-        # Node sizes/colors by membership and majority disease
-        node_ids = list(G.nodes())
-        node_sizes, node_colors = [], []
-        for nid in node_ids:
-            members = graph["nodes"][nid]  # sample indices
-            node_sizes.append(40 + 6 * len(members))
-            if len(members) == 0:
-                node_colors.append("#cccccc")
-            else:
-                node_dz = pd.Series(diseases[members]).astype(str)
-                majority = node_dz.value_counts().idxmax()
-                node_colors.append(disease_to_color.get(majority, "#cccccc"))
+        fig, ax = plt.subplots(figsize=(10, 8))
 
-        # Plot panel
-        plt.figure(figsize=(10, 8))
-        if len(node_ids) > 0:
-            nx.draw_networkx_nodes(
-                G, pos,
-                node_size=node_sizes,
-                node_color=node_colors,
-                alpha=0.95,
-                linewidths=0.5,
-                edgecolors="black"
-            )
+        # Draw edges first
         if len(G.edges()) > 0:
-            nx.draw_networkx_edges(G, pos, alpha=0.35, width=0.8)
-        plt.axis('off')
+            nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.35, width=0.8)
 
-        # Legend on the first panel only
+        # For each node, compute disease fractions and draw a pie
+        for nid in G.nodes():
+            members = graph["nodes"][nid]
+            if len(members) == 0:
+                continue
+            node_dz = pd.Series(diseases[members]).astype(str)
+            counts = node_dz.value_counts().reindex(unique_diseases_sorted, fill_value=0)
+            fracs = counts.values.tolist()
+            colors = [disease_to_color[d] for d in unique_diseases_sorted]
+
+            # Node radius scales with membership (tweakable)
+            # Base radius ~ 0.03 of axis size; increase by sqrt(size) for readability
+            size = len(members)
+            r = 0.02 + 0.004 * np.sqrt(size)
+
+            x, y = pos[nid]
+            draw_pie(ax, x, y, fracs, colors, radius=r)
+
+            # Optional: thin outline circle (already have wedge edges; can skip)
+            # circ = plt.Circle((x, y), r, fill=False, color="black", linewidth=0.3, alpha=0.8)
+            # ax.add_patch(circ)
+
+        ax.set_aspect('equal')
+        ax.axis('off')
+
+        # Legend only on the first panel to save space
         if first_panel:
-            patches = [mpatches.Patch(color=disease_to_color[d], label=d) for d in sorted(unique_diseases)]
-            plt.legend(handles=patches, title="Disease", loc="lower left",
-                       bbox_to_anchor=(0, 1), frameon=False, ncol=3)
+            ax.legend(handles=legend_handles, title="Disease", loc="lower left",
+                      bbox_to_anchor=(0, 1), frameon=False, ncol=3)
             first_panel = False
 
-        name = f"tsne_c{n_cubes}_o{int(perc_overlap*100)}.png"
+        name = f"tsne_pies_c{n_cubes}_o{int(perc_overlap*100)}.png"
         plt.savefig(os.path.join(output_dir, name), dpi=300, bbox_inches='tight')
-        plt.close()
+        plt.close(fig)
 
-print("Mapper images (t-SNE lens) saved to:", output_dir)
+print("Mapper images (t-SNE lens with pie nodes) saved to:", output_dir)
 
 
 # Stitch panels into labeled grid
 folder = output_dir
-output_file = "mapper_grid_tsne.png"
+output_file = "mapper_grid_tsne_pies.png"
 
 file_list = [f for f in os.listdir(folder) if f.endswith(".png")]
 images = {}
-pattern = re.compile(r"tsne_c(\d+)_o(\d+)\.png")
+pattern = re.compile(r"tsne_pies_c(\d+)_o(\d+)\.png")
 for fname in file_list:
     m = pattern.match(fname)
     if not m:
@@ -220,3 +239,4 @@ draw.text((10, top_margin + (grid_h - top_margin - th) // 2),
 
 grid_img.save(output_file)
 print(f"Saved grid to {output_file}")
+
