@@ -1,0 +1,222 @@
+import os
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.cluster import DBSCAN
+from sklearn.manifold import TSNE
+import kmapper as km
+from kmapper import Cover
+import networkx as nx
+from PIL import Image, ImageDraw, ImageFont
+import matplotlib as mpl
+import matplotlib.patches as mpatches
+
+df = pd.read_csv("DrugsFinal.csv")
+
+# Guard columns
+if "Disease" not in df.columns:
+    df["Disease"] = "Unknown"
+if "Drug Name" not in df.columns:
+    df["Drug Name"] = [f"Drug_{i}" for i in range(len(df))]
+
+# Numeric matrix with NA->mean, then scale
+numeric_df = df.select_dtypes(include=[np.number])
+X = numeric_df.fillna(numeric_df.mean())
+X_scaled = StandardScaler().fit_transform(X)
+
+# Labels
+diseases = df["Disease"].astype(str).values
+drug_names = df["Drug Name"].astype(str).values
+label_encoder = LabelEncoder()
+disease_labels = label_encoder.fit_transform(diseases)
+
+
+# t-SNE Lens (2D)
+n_samples = X_scaled.shape[0]
+# Perplexity must be < n_samples; a safe cap:
+perp = max(5, min(30, n_samples // 3))  # tweakable
+
+tsne = TSNE(
+    n_components=2,
+    perplexity=perp,
+    learning_rate="auto",
+    init="pca",
+    n_iter=1000,
+    metric="euclidean",   # switch to "cosine" if desired and supported
+    random_state=42,
+    verbose=0
+)
+lens = tsne.fit_transform(X_scaled)
+
+
+# Mapper Parameters
+n_cubes_list = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+perc_overlap_list = [0.1, 0.15, 0.2. 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
+eps = 30
+min_samples = 3
+
+
+# Output Directory
+output_dir = "mapper_images_tsne"
+os.makedirs(output_dir, exist_ok=True)
+
+
+# Disease color palette
+unique_diseases = pd.Series(diseases).unique()
+cmap = mpl.colormaps.get('tab20')
+disease_to_color = {d: cmap(i % 20) for i, d in enumerate(sorted(unique_diseases))}
+
+# Kepler Mapper
+mapper = km.KeplerMapper(verbose=0)
+
+first_panel = True
+for n_cubes in n_cubes_list:
+    for perc_overlap in perc_overlap_list:
+        # Build Mapper graph
+        graph = mapper.map(
+            lens,
+            X_scaled,
+            cover=Cover(n_cubes=n_cubes, perc_overlap=perc_overlap),
+            clusterer=DBSCAN(eps=eps, min_samples=min_samples)
+        )
+
+        # Convert to NetworkX and layout
+        G = km.adapter.to_nx(graph)
+        pos = nx.spring_layout(G, seed=42)
+
+        # Node sizes/colors by membership and majority disease
+        node_ids = list(G.nodes())
+        node_sizes, node_colors = [], []
+        for nid in node_ids:
+            members = graph["nodes"][nid]  # sample indices
+            node_sizes.append(40 + 6 * len(members))
+            if len(members) == 0:
+                node_colors.append("#cccccc")
+            else:
+                node_dz = pd.Series(diseases[members]).astype(str)
+                majority = node_dz.value_counts().idxmax()
+                node_colors.append(disease_to_color.get(majority, "#cccccc"))
+
+        # Plot panel
+        plt.figure(figsize=(10, 8))
+        if len(node_ids) > 0:
+            nx.draw_networkx_nodes(
+                G, pos,
+                node_size=node_sizes,
+                node_color=node_colors,
+                alpha=0.95,
+                linewidths=0.5,
+                edgecolors="black"
+            )
+        if len(G.edges()) > 0:
+            nx.draw_networkx_edges(G, pos, alpha=0.35, width=0.8)
+        plt.axis('off')
+
+        # Legend on the first panel only
+        if first_panel:
+            patches = [mpatches.Patch(color=disease_to_color[d], label=d) for d in sorted(unique_diseases)]
+            plt.legend(handles=patches, title="Disease", loc="lower left",
+                       bbox_to_anchor=(0, 1), frameon=False, ncol=3)
+            first_panel = False
+
+        name = f"tsne_c{n_cubes}_o{int(perc_overlap*100)}.png"
+        plt.savefig(os.path.join(output_dir, name), dpi=300, bbox_inches='tight')
+        plt.close()
+
+print("Mapper images (t-SNE lens) saved to:", output_dir)
+
+
+# Stitch panels into labeled grid
+folder = output_dir
+output_file = "mapper_grid_tsne.png"
+
+file_list = [f for f in os.listdir(folder) if f.endswith(".png")]
+images = {}
+pattern = re.compile(r"tsne_c(\d+)_o(\d+)\.png")
+for fname in file_list:
+    m = pattern.match(fname)
+    if not m:
+        continue
+    nc = int(m.group(1))
+    ov = int(m.group(2)) / 100
+    img = Image.open(os.path.join(folder, fname))
+    images[(nc, ov)] = img
+
+if not images:
+    raise RuntimeError("No images found to compose. Check earlier steps for errors.")
+
+# Font
+try:
+    font = ImageFont.truetype("arial.ttf", size=100)
+except IOError:
+    font = ImageFont.load_default()
+
+def text_bbox(text, fnt):
+    try:
+        return fnt.getbbox(text)
+    except Exception:
+        return ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), text, font=fnt)
+
+# Dimensions
+sample_img = next(iter(images.values()))
+img_w, img_h = sample_img.size
+label_h = max(text_bbox(f"n_cubes = {n}, overlap = {o:.2f}", font)[3]
+              for n in n_cubes_list for o in perc_overlap_list) + 5
+cell_w, cell_h = img_w, img_h + label_h
+
+# Axis margins
+top_margin = 500
+left_margin = 1200
+
+# Canvas
+grid_w = left_margin + cell_w * len(n_cubes_list)
+grid_h = top_margin + cell_h * len(perc_overlap_list)
+grid_img = Image.new("RGB", (grid_w, grid_h), "white")
+draw = ImageDraw.Draw(grid_img)
+
+# Paste cells with labels
+for i, overlap in enumerate(perc_overlap_list):
+    for j, n_cubes in enumerate(n_cubes_list):
+        x = left_margin + j * cell_w
+        y = top_margin + i * cell_h
+        img = images.get((n_cubes, overlap))
+        if img:
+            grid_img.paste(img, (x, y))
+            label = f"n_cubes = {n_cubes}, overlap = {overlap:.2f}"
+            bbox = text_bbox(label, font)
+            lw = bbox[2] - bbox[0]
+            draw.text((x + (cell_w - lw) // 2, y + img_h + 10), label, fill="black", font=font)
+
+# Top axis: n_cubes
+for j, n in enumerate(n_cubes_list):
+    label = str(n)
+    bbox = text_bbox(label, font)
+    lw, lh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((left_margin + j * cell_w + (cell_w - lw) // 2, (top_margin - lh) // 2),
+              label, fill="black", font=font)
+
+# Left axis: perc_overlap
+for i, o in enumerate(perc_overlap_list):
+    label = f"{o:.2f}"
+    bbox = text_bbox(label, font)
+    lw, lh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((left_margin - lw - 15, top_margin + i * cell_h + (img_h - lh) // 2),
+              label, fill="black", font=font)
+
+# Axis titles
+title_font = font
+title = "n_cubes"
+tw = text_bbox(title, title_font)[2]
+draw.text((left_margin + (grid_w - left_margin - tw) // 2, 10),
+          title, fill="black", font=title_font)
+
+title = "perc_overlap"
+tb = text_bbox(title, title_font)
+tw, th = tb[2], tb[3]
+draw.text((10, top_margin + (grid_h - top_margin - th) // 2),
+          title, fill="black", font=title_font)
+
+grid_img.save(output_file)
+print(f"Saved grid to {output_file}")
