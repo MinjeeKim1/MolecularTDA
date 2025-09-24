@@ -6,28 +6,31 @@ from rdkit.Chem import rdMolDescriptors
 import time
 
 def get_cid_from_name(drug_name):
-    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{drug_name}/cids/JSON"
-    response = requests.get(url)
+    try:
+        import urllib.parse
+        encoded_name = urllib.parse.quote(drug_name)
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{encoded_name}/cids/JSON"
+        response = requests.get(url, timeout=10)
 
-    if response.status_code == 200:
-        data = response.json()
-        cids = data.get("IdentifierList", {}).get("CID", [])
-        if cids:
-            return cids[0] 
+        if response.status_code == 200:
+            data = response.json()
+            cids = data.get("IdentifierList", {}).get("CID", [])
+            if cids:
+                return cids[0] 
+        elif response.status_code == 404:
+            print(f"  No compound found for: {drug_name}")
+        else:
+            print(f"  HTTP {response.status_code} for: {drug_name}")
+    except requests.exceptions.RequestException as e:
+        print(f"  Network error for {drug_name}: {e}")
+    except Exception as e:
+        print(f"  Unexpected error for {drug_name}: {e}")
     return None
 
 
 def get_all_properties_to_excel(drug_names, output_filename="compounds_properties.xlsx"):
     properties = [
-        "Title", "MolecularWeight", "XLogP", "ExactMass", "MonoisotopicMass",
-        "TPSA", "HBondDonorCount", "HBondAcceptorCount", "RotatableBondCount",
-        "HeavyAtomCount", "AtomStereoCount", "DefinedAtomStereoCount",
-        "UndefinedAtomStereoCount", "BondStereoCount", "DefinedBondStereoCount",
-        "UndefinedBondStereoCount", "CovalentUnitCount", "Volume3D",
-        "XStericQuadrupole3D", "YStericQuadrupole3D", "ZStericQuadrupole3D",
-        "FeatureAcceptorCount3D", "FeatureDonorCount3D", "FeatureAnionCount3D",
-        "FeatureCationCount3D", "FeatureRingCount3D", "FeatureHydrophobeCount3D",
-        "ConformerModelRMSD3D", "EffectiveRotorCount3D", "Fingerprint2D"
+        "Fingerprint2D"
     ]
 
     all_data = []
@@ -40,33 +43,46 @@ def get_all_properties_to_excel(drug_names, output_filename="compounds_propertie
             print(f"Could not find CID for drug: {drug}")
             continue
 
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/{','.join(properties)}/CSV"
-        response = requests.get(url)
+        try:
+            url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/{','.join(properties)}/CSV"
+            response = requests.get(url, timeout=10)
 
-        if response.status_code == 200:
-            csv_data = response.text
-            data_frame = pd.read_csv(StringIO(csv_data))
-            data_frame = data_frame.replace(r'^\s*$', 'N/A', regex=True)
+            if response.status_code == 200:
+                csv_data = response.text
+                data_frame = pd.read_csv(StringIO(csv_data))
+                data_frame = data_frame.replace(r'^\s*$', 'N/A', regex=True)
 
-            if "Disease" not in data_frame.columns:
-                data_frame.insert(0, "Disease", "Huntington")
+                data_frame.insert(0, "DrugName", drug)
 
-            all_data.append(data_frame.iloc[0])
-        else:
-            print(f" Error fetching properties for {drug} (CID {cid})")
+                if "Disease" not in data_frame.columns:
+                    data_frame.insert(1, "Disease", "Huntington")
+
+                all_data.append(data_frame.iloc[0])
+                print(f"  Successfully processed {drug} (CID {cid})")
+            else:
+                print(f"  ✗ Error fetching properties for {drug} (CID {cid}): HTTP {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"  Network error for {drug} (CID {cid}): {e}")
+        except Exception as e:
+            print(f"  Unexpected error for {drug} (CID {cid}): {e}")
+        
+        time.sleep(0.2)
 
     if all_data:
         combined_data_frame = pd.DataFrame(all_data)
         combined_data_frame.to_excel(output_filename, index=False)
-        print(f" Saved all data to {output_filename}")
+        print(f"\nSaved {len(all_data)} compounds to {output_filename}")
+        print(f"   Successfully processed: {len(all_data)}/{len(drug_names)} drugs")
     else:
-        print(" No data to save.")
+        print("\nNo data to save - all compounds failed to process")
 
 
 def main(drug_names, output_filename="compounds_properties.xlsx"):
     get_all_properties_to_excel(drug_names, output_filename)
 
-drug_names = ["Raxatrigine hydrochloride"]
+df_pub = pd.read_csv("C:\\MolecularTDA\\getting_properties_scripts\\drugs.csv")
+drug_names = df_pub['Drug Name']
+
 if __name__ == "__main__":
     main(drug_names, output_filename="compounds_properties.xlsx")
 
