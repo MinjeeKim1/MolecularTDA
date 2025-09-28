@@ -1,0 +1,122 @@
+import requests
+import pandas as pd
+from io import StringIO
+import time
+import urllib.parse
+
+# --- Minimal safe properties for PubChem ---
+SAFE_PROPERTIES = [
+    "MolecularFormula",
+    "MolecularWeight",
+    "CanonicalSMILES",
+    "InChI",
+    "InChIKey", 
+    "HeavyAtomCount",
+    "HBondDonorCount",
+    "HBondAcceptorCount",
+    "RotatableBondCount",
+    "TPSA",
+    "ExactMass",
+    "MonoisotopicMass",
+    "Complexity", 
+    "IsotopeAtomCount",
+    "DefinedAtomStereoCount",
+    "UndefinedAtomStereoCount",
+    "DefinedBondStereoCount",
+    "UndefinedBondStereoCount",
+    "CovalentUnitCount",
+    "FeatureAcceptorCount3D",
+    "FeatureDonorCount3D",
+    "FeatureAnionCount3D",
+    "FeatureCationCount3D",
+    "FeatureRingCount3D",
+    "FeatureHydrophobeCount3D",
+    "Volume3D",
+    "XStericQuadrupole3D",
+    "YStericQuadrupole3D",
+    "ZStericQuadrupole3D",
+"FeatureAcceptorCount3D",
+"FeatureDonorCount3D",
+"FeatureAnionCount3D",
+"FeatureCationCount3D",
+    "ConformerModelRMSD3D",
+"EffectiveRotorCount3D",
+"ConformerCount3D",
+"Fingerprint2D"
+
+
+]
+
+def get_cid_from_name(drug_name):
+    if not isinstance(drug_name, str) or not drug_name.strip():
+        return None
+    try:
+        encoded_name = urllib.parse.quote(drug_name)
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{encoded_name}/cids/JSON"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            cids = data.get("IdentifierList", {}).get("CID", [])
+            if cids:
+                return cids[0]
+        elif response.status_code == 404:
+            print(f"  No compound found for: {drug_name}")
+        else:
+            print(f"  HTTP {response.status_code} for: {drug_name}")
+    except requests.exceptions.RequestException as e:
+        print(f"  Network error for {drug_name}: {e}")
+    return None
+
+def get_properties(drug_name, cid):
+    try:
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/{','.join(SAFE_PROPERTIES)}/CSV"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            df = pd.read_csv(StringIO(response.text))
+            df.insert(0, "DrugName", drug_name)
+            if "Disease" not in df.columns:
+                df.insert(1, "Disease", "Huntington")
+            return df.iloc[0].to_dict()
+        else:
+            print(f"  ✗ Could not fetch properties for {drug_name} (CID {cid}): HTTP {response.status_code}")
+    except Exception as e:
+        print(f"  ✗ Unexpected error for {drug_name} (CID {cid}): {e}")
+    
+    # fallback → blank row with just name + disease
+    row = {"DrugName": drug_name, "Disease": "Huntington"}
+    for p in SAFE_PROPERTIES:
+        row[p] = ""
+    return row
+
+
+def main(drug_csv_path, output_filename="compounds_properties.csv"):
+    df = pd.read_csv(drug_csv_path)
+    drug_names = df['Drug Name'].dropna()  # drop empty names and duplicates
+    
+    all_data = []
+    for drug in drug_names:
+        print(f"Processing: {drug}")
+        cid = get_cid_from_name(drug)
+        if cid:
+            data = get_properties(drug, cid)
+        else:
+            # fallback blank row if no CID
+            data = {"DrugName": drug, "Disease": "Huntington"}
+            for p in SAFE_PROPERTIES:
+                data[p] = ""
+        all_data.append(data)
+        time.sleep(0.2)
+
+    
+    if all_data:
+        result_df = pd.DataFrame(all_data)
+        result_df.to_csv(output_filename, index=False)
+        excel_filename = output_filename.replace(".csv", ".xlsx")
+        result_df.to_excel(excel_filename, index=False)
+        print(f"\nSaved {len(all_data)} compounds to {output_filename} and {excel_filename}")
+    else:
+        print("\nNo compounds were successfully processed.")
+
+
+if __name__ == "__main__":
+    main("/Users/divyar/Downloads/Drug Sheet - ireallyhatethis (2).csv")
